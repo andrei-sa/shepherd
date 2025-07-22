@@ -253,40 +253,57 @@ class ConversationMonitor:
         self._log(f"🔍 Looking for logs in: {self.claude_projects_path}")
         self._log(f"📁 Target project path: {project_key}")
         
-        # Look for the most recent JSONL file in any subdirectory that matches our target project
-        most_recent_file = None
-        most_recent_time = 0
+        # Collect all JSONL files with their modification times
+        all_jsonl_files = []
         
         for root, dirs, files in os.walk(self.claude_projects_path):
             for file in files:
                 if file.endswith('.jsonl'):
                     file_path = Path(root) / file
-                    # Check if this log is related to our target directory
                     try:
-                        with open(file_path, 'r') as f:
-                            first_line = f.readline()
-                            if first_line and project_key in first_line:
-                                file_time = file_path.stat().st_mtime
-                                if file_time > most_recent_time:
-                                    most_recent_time = file_time
-                                    most_recent_file = file_path
+                        file_time = file_path.stat().st_mtime
+                        all_jsonl_files.append((file_path, file_time))
+                        self._log(f"📄 Found JSONL: {file_path} (mtime: {file_time})")
                     except:
                         continue
         
-        if not most_recent_file:
-            print(f"⚠️ No logs found for target project: {project_key}")
-            # Show available project directories for debugging
-            if self.verbose:
-                available_projects = [d.name for d in self.claude_projects_path.iterdir() if d.is_dir()]
-                print(f"📋 Available project directories: {available_projects}")
+        if not all_jsonl_files:
+            print("❌ No JSONL log files found in Claude projects directory")
             return None
         
-        if most_recent_file:
-            print(f"📋 Found conversation log: {most_recent_file}")
-            return most_recent_file
-        else:
-            print("❌ No conversation logs found")
-            return None
+        # Sort by modification time (most recent first)
+        all_jsonl_files.sort(key=lambda x: x[1], reverse=True)
+        self._log(f"📊 Found {len(all_jsonl_files)} total JSONL files")
+        
+        # Check each file (starting with most recent) to see if it matches our project
+        for file_path, file_time in all_jsonl_files:
+            try:
+                self._log(f"🔍 Checking file: {file_path}")
+                with open(file_path, 'r') as f:
+                    # Check multiple lines, not just the first one
+                    for line_num, line in enumerate(f):
+                        if line_num >= 10:  # Only check first 10 lines for performance
+                            break
+                        if project_key in line:
+                            self._log(f"✅ Match found in line {line_num + 1}")
+                            print(f"📋 Found conversation log: {file_path}")
+                            return file_path
+            except Exception as e:
+                self._log(f"⚠️ Error reading {file_path}: {e}")
+                continue
+        
+        # If no exact match found, show debugging info and use the most recent file
+        print(f"⚠️ No logs found containing exact project path: {project_key}")
+        if self.verbose:
+            print(f"📋 Available JSONL files (by recency):")
+            for i, (fp, ft) in enumerate(all_jsonl_files[:5]):  # Show top 5
+                timestamp = datetime.fromtimestamp(ft).strftime('%Y-%m-%d %H:%M:%S')
+                print(f"   {i+1}. {fp} ({timestamp})")
+        
+        # Use the most recent file as fallback
+        most_recent_file, most_recent_time = all_jsonl_files[0]
+        print(f"🔄 Using most recent log file as fallback: {most_recent_file}")
+        return most_recent_file
     
     def parse_jsonl_message(self, line: str) -> Optional[Dict[str, Any]]:
         """Parse a JSONL line into a message object"""
