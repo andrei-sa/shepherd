@@ -77,7 +77,14 @@ class ClaudeShepherd:
     
     def load_config(self, project_path: str):
         """Load shepherd configuration from .shepherd/settings.json"""
-        config_path = Path(project_path) / ".shepherd" / "settings.json"
+        # First try shepherd's own directory
+        config_path = Path(__file__).parent / ".shepherd" / "settings.json"
+        
+        # If not found, try user's home directory
+        if not config_path.exists():
+            home_config = Path.home() / ".shepherd" / "settings.json"
+            if home_config.exists():
+                config_path = home_config
         
         if config_path.exists():
             try:
@@ -94,12 +101,17 @@ class ClaudeShepherd:
                 if self.verbose:
                     for rule_name, description in rules.items():
                         print(f"   📋 {rule_name}: {description}")
+            except json.JSONDecodeError as e:
+                print(f"❌ Invalid JSON in shepherd config: {e}")
+                print(f"📄 Please fix {config_path}")
+                sys.exit(1)
             except Exception as e:
                 print(f"⚠️ Error loading shepherd config: {e}")
         else:
-            self._log(f"📋 No shepherd config found at {config_path}")
-            # Create example config
-            self._create_example_config(config_path)
+            print(f"❌ No shepherd config found")
+            print(f"📋 Searched: {Path(__file__).parent / '.shepherd' / 'settings.json'}")
+            print(f"📋 Searched: {Path.home() / '.shepherd' / 'settings.json'}")
+            sys.exit(1)
     
     def _create_example_config(self, config_path: Path):
         """Create an example shepherd configuration file"""
