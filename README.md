@@ -1,3 +1,5 @@
+<img src="image.png" width="100%" />
+
 # 🐑 Claude Code Shepherd
 
 A real-time monitoring tool that supervises Claude Code conversations to ensure development best practices and catch potential issues before they become problems.
