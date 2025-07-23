@@ -32,6 +32,7 @@ class ClaudeShepherd:
         self.message_count = 0
         self.alert_count = 0
         self.prompt_shown = False
+        self.reported_violations = []  # Track violations with message numbers: [{'message_num': int, 'violation': str}]
         self._test_shepherd()
     
     def _log(self, message: str, force: bool = False):
@@ -168,11 +169,29 @@ class ClaudeShepherd:
                 rules_text += f"VIOLATION: {description}\n"
                 rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
         
+        # Build already reported violations section - only include violations still in context window
+        reported_section = ""
+        if self.reported_violations:
+            # Calculate the earliest message number in current context window
+            context_start_message = max(1, self.message_count - context_window + 1)
+            
+            # Clean up violations outside context window
+            self.reported_violations = [
+                v for v in self.reported_violations 
+                if v['message_num'] >= context_start_message
+            ]
+            
+            if self.reported_violations:
+                reported_section = f"\n=== ALREADY REPORTED VIOLATIONS (DO NOT RE-REPORT) ===\n"
+                for violation_entry in self.reported_violations:
+                    reported_section += f"- {violation_entry['violation']} (message #{violation_entry['message_num']})\n"
+                reported_section += "\nIGNORE these violations in your analysis - they have already been reported.\n"
+        
         analysis_prompt = f"""{seed_prompt}
 
 YOUR PRIMARY ROLE: Monitor AI assistant's adherence to development standards
 
-{rules_text}
+{rules_text}{reported_section}
 
 RECENT CONVERSATION CONTEXT ({context_window} messages):
 {context_summary}
@@ -211,9 +230,15 @@ Otherwise respond with: "✅ No violations detected"
                 response = result.stdout.strip()
                 self._log(f"📥 ← Shepherd: {response}")
                 
-                # Count alerts
+                # Count alerts and track reported violations
                 if "🚨 ALERT:" in response:
                     self.alert_count += 1
+                    # Extract the violation for tracking (format: "🚨 ALERT: [rule-name] - [description]")
+                    violation_text = response.replace("🚨 ALERT: ", "")
+                    self.reported_violations.append({
+                        'message_num': self.message_count,
+                        'violation': violation_text
+                    })
                 
                 return response
             else:
