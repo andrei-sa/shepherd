@@ -31,6 +31,7 @@ class ClaudeShepherd:
         self.config = {}
         self.message_count = 0
         self.alert_count = 0
+        self.prompt_shown = False
         self._test_shepherd()
     
     def _log(self, message: str, force: bool = False):
@@ -151,50 +152,54 @@ class ClaudeShepherd:
         # Don't increment here - we already counted this message in add_to_context
         
         # Get the most recent context window (last N messages)
-        context_window = min(self.context_size // 2, len(self.conversation_context))
+        context_window = min(self.context_size, len(self.conversation_context))
         context_summary = "\n".join(self.conversation_context[-context_window:])
         
         # Get seed prompt and rules from config
         seed_prompt = self.config.get('seed', 'You are a software engineering supervisor monitoring a developer conversation.')
         rules = self.config.get('rules', {})
         
-        # Build rules section
+        # Build rules section with clear formatting
         rules_text = ""
         if rules:
-            rules_text = "\nSpecific rules to monitor:\n"
+            rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
             for rule_name, description in rules.items():
-                rules_text += f"- {rule_name}: {description}\n"
+                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"VIOLATION: {description}\n"
+                rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
         
         analysis_prompt = f"""{seed_prompt}
 
-IMPORTANT ROLE DEFINITIONS:
-- "user" messages = the human developer/engineer asking questions or giving instructions
-- "assistant" messages = Claude (the AI coding assistant/developer/copilot) providing responses and code
+YOUR PRIMARY ROLE: Monitor AI assistant's adherence to development standards
 
-Note: "assistant", "developer", "Claude", "AI", "coding assistant", "copilot" all refer to the same entity - the AI helper.
+{rules_text}
 
 RECENT CONVERSATION CONTEXT ({context_window} messages):
 {context_summary}
 
-MONITORING OBJECTIVES:
-1. Watch for the human developer (user) asking the AI assistant to stop (direct commands: "stop", "halt", "quit"; indirect: "that's enough", "never mind"; frustration or direction changes)
-
-{rules_text}
-
-LATEST MESSAGE TO ANALYZE:
+ASSISTANT'S COMPLETE THINKING TO ANALYZE:
 {message_type}: "{message_content}"
 
-CRITICAL: When analyzing rule violations, pay attention to WHO is violating the rule:
-- If a USER asks about skipping practices (tests, documentation, etc.), that's them exploring options or seeking guidance - usually NOT a violation
-- If the ASSISTANT/Claude/AI suggests or implements skipping practices, that's the AI violating development standards - this IS a violation
+ANALYSIS TASK:
+Examine the assistant's complete thought process - reasoning, planning, suggestions, and execution.
+Violations occur when the assistant:
+- Reasons through using prohibited practices
+- Suggests commands or approaches that break rules
+- Plans implementations that violate development standards
+- Executes actions that ignore established practices
+
+Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect any issues, respond with: "🚨 ALERT: [rule-name] - [WHO violated the rule and brief description]"
-Otherwise respond with: "✅ No issues detected"
+If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
+Otherwise respond with: "✅ No violations detected"
 """
         
         try:
             self._log(f"🔍 → Analyzing LATEST message (total processed: {self.message_count}) with context ({len(self.conversation_context)} total, {context_window} in prompt)")
+            if self.verbose and not self.prompt_shown:
+                self._log(f"📋 Full analysis prompt being sent to Claude:\n{'-'*50}\n{analysis_prompt}\n{'-'*50}")
+                self.prompt_shown = True
             result = subprocess.run(
                 ["claude", "-p", analysis_prompt],
                 capture_output=True,
