@@ -609,122 +609,6 @@ class ConversationMonitor:
             return False
         return self.shepherd.message_count > 0 and self.shepherd.message_count % self.heartbeat_interval == 0
     
-    def monitor_conversation(self):
-        """Main monitoring loop"""
-        self.project_log_path = self.find_target_project_log()
-        if not self.project_log_path:
-            return
-        
-        print(f"👁️ Starting to monitor: {self.project_log_path}")
-        print("🔍 Watching for complete messages...")
-        if self.heartbeat_interval > 0:
-            print(f"💚 Heartbeat every {self.heartbeat_interval} messages")
-        print("🛑 Press Ctrl+C to stop monitoring\n")
-        
-        try:
-            # Get current file size to start monitoring from the end
-            if self.project_log_path.exists():
-                with open(self.project_log_path, 'r') as f:
-                    existing_lines = f.readlines()
-                    self.last_processed_line = len(existing_lines)
-                    self._log(f"📊 Starting from line {self.last_processed_line} (skipping existing messages)", force=True)
-            
-            while True:
-                if self.project_log_path.exists():
-                    with open(self.project_log_path, 'r') as f:
-                        lines = f.readlines()
-                        total_lines = len(lines)
-                        
-                        # Debug: Show file activity
-                        if total_lines != self.last_processed_line:
-                            self._log(f"📈 File changed: {self.last_processed_line} -> {total_lines} lines")
-                        
-                        # Process new lines - but prioritize the most recent message
-                        new_lines = lines[self.last_processed_line:]
-                        if new_lines:
-                            self._log(f"🔄 Processing {len(new_lines)} new messages...")
-                            
-                            # If there are multiple new messages, skip to the last one
-                            # but update our conversation context with all messages
-                            for i, line in enumerate(new_lines):
-                                line_num = self.last_processed_line + i + 1
-                                self._log(f"🔍 Processing line {line_num}: {line[:100]}...")
-                                
-                                message = self.parse_jsonl_message(line)
-                                if message:
-                                    if self.verbose and line_num <= 10:  # Show structure for debugging
-                                        self._log(f"🔬 Full message structure: {json.dumps(message, indent=2)[:500]}...")
-                                    
-                                    self._log(f"📋 Parsed message: type={message.get('type')}, content_length={len(self.extract_content(message))}")
-                                    
-                                    if self.is_complete_message(message):
-                                        self._log(f"✅ Complete message detected!")
-                                        
-                                        # Add to context but only analyze the last message
-                                        msg_type = message.get('type', 'unknown')
-                                        content = self.extract_content(message)
-                                        
-                                        if content and not content.isspace():
-                                            # Always add to shepherd's context
-                                            self.shepherd.add_to_context(content, msg_type)
-                                            self._log(f"📝 Added to context: {msg_type}")
-                                            
-                                            # Check heartbeat after every message
-                                            if self.should_show_heartbeat():
-                                                print(self.shepherd.get_heartbeat_status(str(self.target_project_path), self.heartbeat_interval))
-                                            
-                                            # Only analyze if this is the last message
-                                            if i == len(new_lines) - 1:
-                                                self._log(f"🎯 This is the LAST message ({i+1}/{len(new_lines)}), analyzing...")
-                                                self.process_latest_message(message)
-                                            else:
-                                                self._log(f"⏭️ Skipping analysis for message {i+1}/{len(new_lines)} (not the last)")
-                                    else:
-                                        self._log(f"⏳ Incomplete message, skipping")
-                                else:
-                                    self._log(f"❌ Failed to parse JSON from line")
-                        
-                        self.last_processed_line = total_lines
-                else:
-                    self._log(f"❌ Log file no longer exists: {self.project_log_path}")
-                
-                time.sleep(1)  # Check for new messages every second
-                
-        except KeyboardInterrupt:
-            print(f"\n🛑 Monitoring stopped by user")
-            print(f"📊 Final status: {self.shepherd.get_heartbeat_status()}")
-        except Exception as e:
-            print(f"❌ Error during monitoring: {e}")
-        finally:
-            self.shepherd.close()
-    
-    def process_latest_message(self, message: Dict[str, Any]):
-        """Process only the latest message through the shepherd"""
-        msg_type = message.get('type', 'unknown')
-        content = self.extract_content(message)
-        timestamp = message.get('timestamp', '')
-        
-        if not content or content.isspace():
-            return
-        
-        self._log(f"\n📨 Analyzing LATEST {msg_type} message at {timestamp}")
-        self._log(f"💬 Content preview: {content[:100]}{'...' if len(content) > 100 else ''}")
-        
-        # Send to shepherd for analysis
-        try:
-            self._log("🔄 Sending latest message to shepherd...")
-            response = self.shepherd.analyze_latest_message(content, msg_type)
-            if response:
-                if "🚨 ALERT:" in response:
-                    print(f"\n{response}")
-                    print("=" * 50)
-                elif self.verbose:
-                    print(f"✅ Shepherd: {response}")
-                    
-            else:
-                self._log("⚠️ No response from shepherd")
-        except Exception as e:
-            self._log(f"❌ Error analyzing message: {e}")
 
 
 class MultiProjectMonitor:
@@ -943,7 +827,7 @@ def main():
     args = parser.parse_args()
     
     if args.project_path:
-        # Single project mode
+        # Single project mode - validate path and create single-item list
         project_path = Path(args.project_path).resolve()
         if not project_path.exists():
             print(f"❌ Error: Project path does not exist: {project_path}")
@@ -960,24 +844,21 @@ def main():
         print(f"📏 Context size: {args.context} messages")
         print()
         
-        monitor = ConversationMonitor(
-            str(project_path), 
-            verbose=args.verbose,
-            heartbeat_interval=args.heartbeat,
-            context_size=args.context
-        )
-        monitor.monitor_conversation()
+        # Use MultiProjectMonitor with single project
+        projects = [str(project_path)]
         
     else:
-        # Multi-project mode - load from .claude/projects.json
+        # Multi-project mode - load from .shepherd/projects.json
         projects = load_multi_project_config()
-        monitor = MultiProjectMonitor(
-            projects,
-            verbose=args.verbose,
-            heartbeat_interval=args.heartbeat,
-            context_size=args.context
-        )
-        monitor.monitor_all_projects()
+        
+    # Use unified MultiProjectMonitor for both modes
+    monitor = MultiProjectMonitor(
+        projects,
+        verbose=args.verbose,
+        heartbeat_interval=args.heartbeat,
+        context_size=args.context
+    )
+    monitor.monitor_all_projects()
 
 
 if __name__ == "__main__":
