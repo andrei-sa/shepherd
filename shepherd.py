@@ -36,20 +36,27 @@ def format_structured_alert(alert_response: str, project_path: str) -> str:
     """Parse and format structured alert with color coding"""
     lines = alert_response.strip().split('\n')
     
-    # Extract alert name from first line
-    alert_match = re.match(r'ALERT:\s*(.+)', lines[0])
-    if not alert_match:
+    # Find the ALERT line (can be anywhere in the response)
+    alert_line_index = -1
+    alert_name = ""
+    
+    for i, line in enumerate(lines):
+        alert_match = re.match(r'ALERT:\s*(.+)', line)
+        if alert_match:
+            alert_line_index = i
+            alert_name = alert_match.group(1).strip()
+            break
+    
+    if alert_line_index == -1:
         # Fallback: still apply basic project path formatting even if parsing fails
         return f"{Colors.RED}{project_path}: {alert_response}{Colors.RESET}"
     
-    alert_name = alert_match.group(1).strip()
-    
-    # Find REASON and SUGGESTION sections
+    # Parse sections from the ALERT line onwards
     reason_text = ""
     suggestion_text = ""
     
     current_section = None
-    for line in lines[1:]:
+    for line in lines[alert_line_index + 1:]:
         if line.startswith('REASON:'):
             current_section = 'reason'
             reason_text = line[7:].strip()  # Remove "REASON:" prefix
@@ -458,7 +465,6 @@ CRITICAL FORMATTING REQUIREMENTS:
                 if not self._is_properly_formatted(response):
                     print(f"❌ Claude failed to adhere to required response contract after reformat attempt")
                     print(f"Original malformed response: {original_response}")
-                    print(f"Reformat result (still malformed): {response}")
                     print(f"Will process as-is with basic formatting only")
                     # Still process the response as-is for basic functionality
             
@@ -574,8 +580,9 @@ CRITICAL FORMATTING REQUIREMENTS:
         
         lines = response.strip().split('\n')
         
-        # Check if first line starts with "ALERT:"
-        if not lines[0].startswith('ALERT:'):
+        # Find the ALERT line (can be anywhere in response)
+        alert_line_found = any(line.startswith('ALERT:') for line in lines)
+        if not alert_line_found:
             return False
         
         # Check if REASON: exists (required)
@@ -888,7 +895,7 @@ class MultiProjectMonitor:
                         if future.done():
                             try:
                                 result = future.result()
-                                if "🚨 ALERT:" in result:
+                                if "ALERT:" in result:
                                     formatted_alert = format_structured_alert(result, project_path)
                                     print(f"\n{formatted_alert}")
                                     print("=" * 50)
