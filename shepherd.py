@@ -219,7 +219,7 @@ class ClaudeShepherd:
         if rules:
             rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
             for rule_name, description in rules.items():
-                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"\nRULE: {rule_name}\n"
                 rules_text += f"VIOLATION: {description}\n"
                 rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
         
@@ -371,7 +371,7 @@ CRITICAL FORMATTING REQUIREMENTS:
         if rules:
             rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
             for rule_name, description in rules.items():
-                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"\nRULE: {rule_name}\n"
                 rules_text += f"VIOLATION: {description}\n"
                 rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
         
@@ -491,7 +491,7 @@ CRITICAL FORMATTING REQUIREMENTS:
         if rules:
             rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
             for rule_name, description in rules.items():
-                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"\nRULE: {rule_name}\n"
                 rules_text += f"VIOLATION: {description}\n"
                 rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
         
