@@ -18,10 +18,58 @@ import signal
 import sys
 import argparse
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+
+# Color codes for output
+class Colors:
+    RED = '\033[31m'
+    ORANGE = '\033[33m'
+    GREEN = '\033[32m'
+    RESET = '\033[0m'
+
+
+def format_structured_alert(alert_response: str, project_path: str) -> str:
+    """Parse and format structured alert with color coding"""
+    lines = alert_response.strip().split('\n')
+    
+    # Extract alert name from first line
+    alert_match = re.match(r'🚨 ALERT:\s*(.+)', lines[0])
+    if not alert_match:
+        return alert_response  # Fallback to original if parsing fails
+    
+    alert_name = alert_match.group(1).strip()
+    
+    # Find REASON and SUGGESTION sections
+    reason_text = ""
+    suggestion_text = ""
+    
+    current_section = None
+    for line in lines[1:]:
+        if line.startswith('REASON:'):
+            current_section = 'reason'
+            reason_text = line[7:].strip()  # Remove "REASON:" prefix
+        elif line.startswith('SUGGESTION:'):
+            current_section = 'suggestion'
+            suggestion_text = line[11:].strip()  # Remove "SUGGESTION:" prefix
+        elif current_section == 'reason' and line.strip():
+            reason_text += " " + line.strip()
+        elif current_section == 'suggestion' and line.strip():
+            suggestion_text += " " + line.strip()
+    
+    # Format with colors
+    formatted_output = f"{Colors.RED}{project_path}: 🚨 {alert_name}{Colors.RESET}\n"
+    
+    if reason_text:
+        formatted_output += f"{Colors.ORANGE}REASON: {reason_text}{Colors.RESET}\n"
+    
+    if suggestion_text:
+        formatted_output += f"{Colors.GREEN}SUGGESTION: {suggestion_text}{Colors.RESET}\n"
+    
+    return formatted_output
 
 
 class ClaudeShepherd:
@@ -215,8 +263,16 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
-Otherwise respond with: "✅ No violations detected"
+If you detect any issues, respond with:
+"🚨 ALERT: [rule-name]
+REASON: [2-5 sentence explanation of how the rule was violated]
+SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
+
+If no issues, respond with: "✅ No violations detected"
+
+IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
+1. Fix the current violation (if applicable)  
+2. Prevent making the same or similar mistakes in future responses
 """
         
         try:
@@ -238,8 +294,9 @@ Otherwise respond with: "✅ No violations detected"
                 # Count alerts and track reported violations
                 if "🚨 ALERT:" in response:
                     self.alert_count += 1
-                    # Extract the violation for tracking (format: "🚨 ALERT: [rule-name] - [description]")
-                    violation_text = response.replace("🚨 ALERT: ", "")
+                    # Extract the rule name for tracking from structured format
+                    alert_match = re.match(r'🚨 ALERT:\s*(.+)', response.split('\n')[0])
+                    violation_text = alert_match.group(1).strip() if alert_match else response.replace("🚨 ALERT: ", "")
                     self.reported_violations.append({
                         'message_num': self.message_count,
                         'violation': violation_text
@@ -343,8 +400,16 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
-Otherwise respond with: "✅ No violations detected"
+If you detect any issues, respond with:
+"🚨 ALERT: [rule-name]
+REASON: [2-5 sentence explanation of how the rule was violated]
+SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
+
+If no issues, respond with: "✅ No violations detected"
+
+IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
+1. Fix the current violation (if applicable)  
+2. Prevent making the same or similar mistakes in future responses
 """
         
         # Log debug info
@@ -368,8 +433,9 @@ Otherwise respond with: "✅ No violations detected"
             # Count alerts and track reported violations
             if "🚨 ALERT:" in response:
                 self.alert_count += 1
-                # Extract the violation for tracking (format: "🚨 ALERT: [rule-name] - [description]")
-                violation_text = response.replace("🚨 ALERT: ", "")
+                # Extract the rule name for tracking from structured format
+                alert_match = re.match(r'🚨 ALERT:\s*(.+)', response.split('\n')[0])
+                violation_text = alert_match.group(1).strip() if alert_match else response.replace("🚨 ALERT: ", "")
                 self.reported_violations.append({
                     'message_num': self.message_count,
                     'violation': violation_text
@@ -438,8 +504,16 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
-Otherwise respond with: "✅ No violations detected"
+If you detect any issues, respond with:
+"🚨 ALERT: [rule-name]
+REASON: [2-5 sentence explanation of how the rule was violated]
+SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
+
+If no issues, respond with: "✅ No violations detected"
+
+IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
+1. Fix the current violation (if applicable)  
+2. Prevent making the same or similar mistakes in future responses
 """
     
     def get_heartbeat_status(self, project_name: str = "", heartbeat_interval: int = 10) -> str:
@@ -734,7 +808,8 @@ class MultiProjectMonitor:
                             try:
                                 result = future.result()
                                 if "🚨 ALERT:" in result:
-                                    print(f"\n🚨 {project_path}: {result}")
+                                    formatted_alert = format_structured_alert(result, project_path)
+                                    print(f"\n{formatted_alert}")
                                     print("=" * 50)
                                 elif self.verbose:
                                     print(f"✅ {project_path}: {result}")

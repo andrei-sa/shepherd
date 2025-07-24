@@ -2,234 +2,137 @@
 
 # 🐑 Claude Code Shepherd
 
-A real-time monitoring tool that supervises Claude Code conversations to ensure development best practices and catch potential issues before they become problems.
-
-## Overview
-
-Claude Code Shepherd watches your Claude Code conversations in real-time and alerts you when:
-- Users ask Claude to stop but Claude ignores the request
-- Development best practices are violated (skipping tests, poor error handling, etc.)
-- Custom project-specific rules are broken
-
-The tool runs as a separate process, monitoring conversation logs while you work normally with Claude Code.
+A monitoring script that watches Claude Code conversations for rule violations and development issues using intelligent AI analysis.
 
 ## Features
 
-- **Real-time Monitoring**: Analyzes conversations as they happen
-- **Customizable Rules**: Define project-specific development standards
-- **Context-Aware**: Understands conversation flow and distinguishes between user questions and Claude suggestions
-- **Role Attribution**: Correctly identifies whether issues come from the human developer or Claude
-- **Heartbeat Monitoring**: Regular status updates showing messages processed and alerts raised
-- **Verbose Debugging**: Optional detailed logging for troubleshooting
+- **Real-time monitoring** of Claude Code conversation logs
+- **Custom rules** defined in `.shepherd/settings.json` 
+- **Smart analysis** using Claude API calls to detect violations in reasoning and suggestions
+- **Context-aware** tracking with configurable message windows
+- **Violation tracking** to prevent duplicate alerts within context windows
+- **Heartbeat status** showing monitoring activity and message counts
+- **Multi-project support** with concurrent monitoring and async analysis
+- **Structured alerts** with detailed reasoning and actionable suggestions
+- **Color-coded output** for easy visual parsing of alerts
 
 ## Installation
 
-1. **Prerequisites**: 
-   - Python 3.7+
-   - Claude Code installed and working
-   - Active Claude Code session in your project
-
-2. **Download**: 
-   ```bash
-   curl -O https://raw.githubusercontent.com/your-repo/shepherd.py
-   # or clone the repository
-   ```
-
-3. **Dependencies**:
-   ```bash
-   # No additional dependencies required - uses Python standard library
-   ```
-
-## Quick Start
-
-1. **Start monitoring** your current Claude Code session:
-   ```bash
-   python shepherd.py /path/to/your/project
-   ```
-
-2. **Continue using Claude Code normally** - the shepherd runs in the background
-
-3. **Receive alerts** when issues are detected:
-   ```
-   🚨 ALERT: test-coverage - Claude suggested skipping unit tests for the new feature
-   ==================================================
-   ```
-
-## Usage
-
-### Basic Command
-
-```bash
-python shepherd.py /path/to/project
-```
-
-### Command Line Options
-
-```bash
-python shepherd.py /path/to/project [OPTIONS]
-
-Options:
-  -v, --verbose     Enable detailed debug output
-  -b, --heartbeat   Show status every N messages (default: 10, 0 to disable)
-  -c, --context     Number of messages to include in analysis context (default: 10)
-```
-
-### Examples
-
-```bash
-# Monitor with default settings
-python shepherd.py /Users/dev/my-project
-
-# Verbose mode with custom heartbeat
-python shepherd.py /Users/dev/my-project -v -b 5
-
-# Large context window, no heartbeat
-python shepherd.py /Users/dev/my-project -c 20 -b 0
-
-# Full debugging
-python shepherd.py /Users/dev/my-project -v -b 1 -c 15
-```
+1. Clone this repository
+2. Ensure you have Python 3.7+ installed  
+3. Configure your rules in `.shepherd/settings.json`
+4. Ensure Claude Code is installed and configured
 
 ## Configuration
 
-### Creating Shepherd Rules
+### Rules Configuration
 
-The shepherd looks for `.shepherd/settings.json` in your project directory. If not found, it creates an example configuration:
+Create `.shepherd/settings.json` with your monitoring rules:
 
 ```json
 {
-  "seed": "You are an experienced software engineering supervisor monitoring a junior developer's Claude Code conversation. You have high standards for code quality, testing practices, and professional development habits. Be vigilant about catching issues early before they become problems.",
+  "seed": "You are a software engineering supervisor monitoring a developer conversation.",
   "rules": {
-    "test-coverage": "Every code change must be covered with comprehensive unit tests before being considered complete. Watch for commits or 'done' declarations without corresponding tests.",
-    "test-failures": "Failing unit tests are never acceptable and must be fixed immediately. Watch for developers ignoring, skipping, or postponing test fixes.",
-    "code-review": "All code should be properly reviewed and meet quality standards. Watch for rushed implementations or skipped review processes.",
-    "documentation": "Complex functions and API changes require proper documentation. Watch for missing or inadequate documentation.",
-    "error-handling": "Proper error handling and edge case consideration is mandatory. Watch for naive implementations that don't handle failures gracefully."
+    "git-add-all": "Using 'git add .' or 'git add -A' without reviewing changes first",
+    "test-coverage": "Skipping tests or deploying code without running existing tests", 
+    "temp-file": "Creating temporary files in project directories",
+    "hardcoded-secrets": "Including API keys, passwords, or secrets directly in code",
+    "no-error-handling": "Writing code without proper error handling or validation"
   }
 }
 ```
 
-### Configuration Fields
+### Multi-Project Configuration
 
-- **`seed`**: The persona/role for the supervising Claude instance
-- **`rules`**: Object containing rule names and descriptions to monitor
-
-### Customizing Rules
-
-Add your own project-specific rules:
+For multi-project mode, create `.shepherd/projects.json`:
 
 ```json
 {
-  "seed": "You are monitoring a financial services application where security and reliability are paramount.",
-  "rules": {
-    "security-review": "All authentication and data handling code must be security reviewed",
-    "input-validation": "All user inputs must be properly validated and sanitized",
-    "logging": "All error conditions must be properly logged for audit trails",
-    "performance": "Database queries must be optimized and indexed appropriately"
-  }
+  "projects": [
+    "/path/to/project1",
+    "/path/to/project2",
+    "/path/to/project3"
+  ]
 }
 ```
+
+## Usage
+
+### Single Project Mode
+```bash
+python shepherd.py /path/to/project [-v] [-b 10] [-c 10]
+```
+
+### Multi-Project Mode  
+```bash
+python shepherd.py [-v] [-b 10] [-c 10]
+```
+
+**Command Line Options:**
+- `-v` or `--verbose`: Enable detailed debug output
+- `-b NUM` or `--heartbeat NUM`: Show heartbeat every NUM messages (default: 10, 0 to disable)
+- `-c SIZE` or `--context SIZE`: Number of messages to include in analysis context (default: 10)
 
 ## How It Works
 
-1. **Log Monitoring**: Shepherd watches Claude Code's conversation logs in `~/.claude/projects/`
-2. **Context Building**: Maintains a rolling window of recent conversation context
-3. **Real-time Analysis**: When new messages arrive, analyzes the latest message with full context
-4. **Rule Evaluation**: Checks against built-in stop detection and custom rules
-5. **Alert Generation**: Reports violations with proper attribution (user vs Claude)
+1. **Real-time Monitoring**: Watches Claude Code conversation logs for new messages
+2. **Intelligent Analysis**: Uses Claude API to analyze assistant reasoning and suggestions
+3. **Rule-based Detection**: Checks for violations against your custom development rules
+4. **Context Tracking**: Maintains conversation context and tracks reported violations
+5. **Async Processing**: Processes multiple projects concurrently with non-blocking analysis
+6. **Smart Alerting**: Avoids duplicate alerts for violations still within context window
 
-### Performance Optimization
+## Alert Output Format
 
-- **Latest Message Priority**: Skips intermediate messages in rapid conversations, analyzing only the most recent
-- **Context Management**: Maintains conversation history without analyzing every message
-- **Efficient Processing**: Uses subprocess calls to Claude for reliable analysis
+When violations are detected, Shepherd provides structured, color-coded alerts:
 
-## Alert Types
-
-### Stop Request Detection
 ```
-🚨 ALERT: stop-request - User asked Claude to halt the current task but Claude continued anyway
-```
-
-### Rule Violations
-```
-🚨 ALERT: test-coverage - Claude suggested deploying without writing unit tests for the new API endpoints
-🚨 ALERT: error-handling - Claude implemented the database connection without proper error handling
+/path/to/project: 🚨 rule-name
+REASON: Detailed explanation of how the rule was violated and what the assistant did wrong.
+SUGGESTION: Specific guidance for the assistant to fix the current issue and prevent similar mistakes.
+========================================
 ```
 
-### Heartbeat Messages
+**Color Coding:**
+- **Red**: Project path and alert type
+- **Orange**: Reason section explaining the violation  
+- **Green**: Suggestion section with actionable guidance (when available)
+
+## Advanced Features
+
+### Violation Tracking
+- Prevents duplicate alerts for the same violation within the context window
+- Automatically cleans up old violations when they fall outside the context
+- Tracks violations by message number for precise context management
+
+### Multi-Project Monitoring
+- Monitors multiple projects simultaneously with async Claude API calls
+- Independent heartbeat tracking per project
+- Concurrent analysis without blocking file monitoring
+- Unified output with clear project identification
+
+### Context Management
+- Configurable context window size for analysis
+- Smart context building with recent conversation history
+- Rule-aware analysis that considers conversation flow
+
+## Requirements
+
+- Python 3.7+
+- Claude Code installed and configured
+- Access to Claude API via Claude Code
+- Read access to Claude Code conversation logs
+
+## Directory Structure
+
 ```
-💚 Shepherd: 25 messages processed, all clear
-⚠️ Shepherd: 40 messages processed, 3 alerts raised
+your-project/
+├── .shepherd/
+│   ├── settings.json      # Rules and configuration
+│   └── projects.json      # Multi-project setup (optional)
+└── shepherd.py            # Main monitoring script
 ```
-
-## Best Practices
-
-### 1. Project-Specific Configuration
-Create tailored rules for each project's standards and requirements.
-
-### 2. Appropriate Context Size
-- Small projects: `-c 5-10`
-- Large projects: `-c 15-20`
-- Complex conversations: `-c 20+`
-
-### 3. Heartbeat Tuning
-- Active development: `-b 5-10`
-- Background monitoring: `-b 20-50`
-- Silent monitoring: `-b 0`
-
-### 4. Running Multiple Shepherds
-Monitor multiple projects simultaneously:
-```bash
-# Terminal 1
-python shepherd.py /project1 -b 0
-
-# Terminal 2  
-python shepherd.py /project2 -b 0
-
-# Terminal 3
-python shepherd.py /project3 -v
-```
-
-## Troubleshooting
-
-### Shepherd Not Finding Logs
-```bash
-# Run with verbose mode to see log discovery process
-python shepherd.py /your/project -v
-```
-
-### No Messages Being Processed
-1. Ensure Claude Code is running in the target project
-2. Check that conversation logs exist in `~/.claude/projects/`
-3. Verify the project path matches exactly
-
-### False Positive Alerts
-1. Refine your rules in `.shepherd/settings.json`
-2. Improve the seed prompt to better define the supervisor role
-3. Use verbose mode to understand the analysis process
-
-### Performance Issues
-1. Reduce context size with `-c 5`
-2. Increase heartbeat interval with `-b 20`
-3. Check Claude Code responsiveness
-
-## Contributing
-
-We welcome contributions! Areas for improvement:
-- Additional built-in rules
-- Performance optimizations
-- Better context analysis
-- Integration with other development tools
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Support
-
-For issues and feature requests, please open a GitHub issue with:
-- Your command line usage
-- Relevant log output (with `-v` flag)
-- Example of the conversation that caused issues
-- Your `.shepherd/settings.json` configuration
+MIT License
