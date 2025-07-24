@@ -37,9 +37,10 @@ def format_structured_alert(alert_response: str, project_path: str) -> str:
     lines = alert_response.strip().split('\n')
     
     # Extract alert name from first line
-    alert_match = re.match(r'🚨 ALERT:\s*(.+)', lines[0])
+    alert_match = re.match(r'ALERT:\s*(.+)', lines[0])
     if not alert_match:
-        return alert_response  # Fallback to original if parsing fails
+        # Fallback: still apply basic project path formatting even if parsing fails
+        return f"{Colors.RED}{project_path}: {alert_response}{Colors.RESET}"
     
     alert_name = alert_match.group(1).strip()
     
@@ -263,16 +264,18 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect any issues, respond with:
-"🚨 ALERT: [rule-name]
+If you detect any issues, respond EXACTLY in this format:
+"ALERT: [rule-name-exactly-as-configured]
 REASON: [2-5 sentence explanation of how the rule was violated]
 SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
 
 If no issues, respond with: "✅ No violations detected"
 
-IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
-1. Fix the current violation (if applicable)  
-2. Prevent making the same or similar mistakes in future responses
+CRITICAL FORMATTING REQUIREMENTS:
+- Use "ALERT:" (no emoji) followed by the exact rule name from the configuration
+- Do NOT change the case or formatting of rule names - use them exactly as configured
+- Each section must start on a new line with the exact labels: "ALERT:", "REASON:", "SUGGESTION:"
+- The SUGGESTION is directed at the ASSISTANT being monitored
 """
         
         try:
@@ -291,12 +294,25 @@ IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored)
                 response = result.stdout.strip()
                 self._log(f"📥 ← Shepherd: {response}")
                 
+                # Check if response needs reformatting
+                if "ALERT:" in response and not self._is_properly_formatted(response):
+                    self._log("⚠️ Response not properly formatted, attempting reformat...")
+                    original_response = response
+                    response = self._attempt_reformat(response)
+                    
+                    # If still not properly formatted after reformat attempt
+                    if not self._is_properly_formatted(response):
+                        print(f"❌ Claude failed to adhere to required response contract")
+                        print(f"Original response: {original_response}")
+                        print(f"Attempted reformat: {response}")
+                        # Still process the response as-is for basic functionality
+                
                 # Count alerts and track reported violations
-                if "🚨 ALERT:" in response:
+                if "ALERT:" in response:
                     self.alert_count += 1
                     # Extract the rule name for tracking from structured format
-                    alert_match = re.match(r'🚨 ALERT:\s*(.+)', response.split('\n')[0])
-                    violation_text = alert_match.group(1).strip() if alert_match else response.replace("🚨 ALERT: ", "")
+                    alert_match = re.match(r'ALERT:\s*(.+)', response.split('\n')[0])
+                    violation_text = alert_match.group(1).strip() if alert_match else response.replace("ALERT: ", "")
                     self.reported_violations.append({
                         'message_num': self.message_count,
                         'violation': violation_text
@@ -400,16 +416,18 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect any issues, respond with:
-"🚨 ALERT: [rule-name]
+If you detect any issues, respond EXACTLY in this format:
+"ALERT: [rule-name-exactly-as-configured]
 REASON: [2-5 sentence explanation of how the rule was violated]
 SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
 
 If no issues, respond with: "✅ No violations detected"
 
-IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
-1. Fix the current violation (if applicable)  
-2. Prevent making the same or similar mistakes in future responses
+CRITICAL FORMATTING REQUIREMENTS:
+- Use "ALERT:" (no emoji) followed by the exact rule name from the configuration
+- Do NOT change the case or formatting of rule names - use them exactly as configured
+- Each section must start on a new line with the exact labels: "ALERT:", "REASON:", "SUGGESTION:"
+- The SUGGESTION is directed at the ASSISTANT being monitored
 """
         
         # Log debug info
@@ -430,12 +448,26 @@ IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored)
             response = stdout
             self._log(f"📥 ← Shepherd: {response}")
             
-            # Count alerts and track reported violations
-            if "🚨 ALERT:" in response:
+            # Check if response needs reformatting
+            if "ALERT:" in response and not self._is_properly_formatted(response):
+                self._log("⚠️ Response not properly formatted, attempting reformat...")
+                original_response = response
+                response = self._attempt_reformat(response)
+                
+                # If still not properly formatted after reformat attempt
+                if not self._is_properly_formatted(response):
+                    print(f"❌ Claude failed to adhere to required response contract after reformat attempt")
+                    print(f"Original malformed response: {original_response}")
+                    print(f"Reformat result (still malformed): {response}")
+                    print(f"Will process as-is with basic formatting only")
+                    # Still process the response as-is for basic functionality
+            
+            # Count alerts and track reported violations  
+            if "ALERT:" in response:
                 self.alert_count += 1
                 # Extract the rule name for tracking from structured format
-                alert_match = re.match(r'🚨 ALERT:\s*(.+)', response.split('\n')[0])
-                violation_text = alert_match.group(1).strip() if alert_match else response.replace("🚨 ALERT: ", "")
+                alert_match = re.match(r'ALERT:\s*(.+)', response.split('\n')[0])
+                violation_text = alert_match.group(1).strip() if alert_match else response.replace("ALERT: ", "")
                 self.reported_violations.append({
                     'message_num': self.message_count,
                     'violation': violation_text
@@ -504,16 +536,18 @@ Violations occur when the assistant:
 Focus on the assistant's decision-making process, not user requests or questions.
 
 RESPONSE FORMAT:
-If you detect any issues, respond with:
-"🚨 ALERT: [rule-name]
+If you detect any issues, respond EXACTLY in this format:
+"ALERT: [rule-name-exactly-as-configured]
 REASON: [2-5 sentence explanation of how the rule was violated]
 SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake and/or prevent similar mistakes in the future]"
 
 If no issues, respond with: "✅ No violations detected"
 
-IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored). Provide specific guidance the assistant can use to:
-1. Fix the current violation (if applicable)  
-2. Prevent making the same or similar mistakes in future responses
+CRITICAL FORMATTING REQUIREMENTS:
+- Use "ALERT:" (no emoji) followed by the exact rule name from the configuration
+- Do NOT change the case or formatting of rule names - use them exactly as configured
+- Each section must start on a new line with the exact labels: "ALERT:", "REASON:", "SUGGESTION:"
+- The SUGGESTION is directed at the ASSISTANT being monitored
 """
     
     def get_heartbeat_status(self, project_name: str = "", heartbeat_interval: int = 10) -> str:
@@ -533,6 +567,62 @@ IMPORTANT: The SUGGESTION is directed at the ASSISTANT (the one being monitored)
         
         return status
     
+    def _is_properly_formatted(self, response: str) -> bool:
+        """Check if response follows the expected format"""
+        if "ALERT:" not in response:
+            return True  # No alert, so format doesn't matter
+        
+        lines = response.strip().split('\n')
+        
+        # Check if first line starts with "ALERT:"
+        if not lines[0].startswith('ALERT:'):
+            return False
+        
+        # Check if REASON: exists (required)
+        has_reason = any(line.startswith('REASON:') for line in lines)
+        if not has_reason:
+            return False
+        
+        return True
+    
+    def _attempt_reformat(self, malformed_response: str) -> str:
+        """Attempt to reformat a malformed response using a focused prompt"""
+        if not self.is_running:
+            return malformed_response
+        
+        reformat_prompt = f"""Re-format this message in the required format:
+
+ORIGINAL MESSAGE:
+{malformed_response}
+
+REQUIRED FORMAT:
+ALERT: [rule-name-exactly-as-configured]
+REASON: [2-5 sentence explanation of how the rule was violated]
+SUGGESTION: [optional: actionable advice for the ASSISTANT to fix the current mistake]
+
+CRITICAL: Use "ALERT:" (no emoji), keep rule names in lowercase-with-hyphens format, start each section on a new line."""
+
+        try:
+            result = subprocess.run(
+                ['claude', '--no-cache'],
+                input=reformat_prompt,
+                text=True,
+                capture_output=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                reformatted = result.stdout.strip()
+                self._log(f"🔧 Reformatted response: {reformatted}")
+                return reformatted
+            else:
+                self._log(f"❌ Reformat failed: {result.stderr}")
+                return malformed_response
+                
+        except Exception as e:
+            self._log(f"❌ Reformat error: {e}")
+            return malformed_response
+
     def close(self):
         """No cleanup needed for subprocess approach"""
         self.is_running = False
