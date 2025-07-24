@@ -121,7 +121,7 @@ class ClaudeShepherd:
                 response = test_call.stdout.strip()
                 self._log(f"✅ Shepherd test successful: {response}")
                 self.is_running = True
-                print("✅ Shepherd initialized (subprocess mode with context tracking)")
+                self._log("✅ Shepherd initialized (subprocess mode with context tracking)")
             else:
                 print(f"❌ Shepherd test failed: {test_call.stderr}")
                 self.is_running = False
@@ -149,9 +149,9 @@ class ClaudeShepherd:
                 rules = self.config.get('rules', {})
                 seed = self.config.get('seed', 'Act as a software engineering supervisor')
                 
-                print(f"✅ Loaded shepherd config from {config_path}")
-                print(f"📋 Seed: {seed}")
-                print(f"📏 Rules: {len(rules)} configured")
+                self._log(f"✅ Loaded shepherd config from {config_path}")
+                self._log(f"📋 Seed: {seed}")
+                self._log(f"📏 Rules: {len(rules)} configured")
                 
                 if self.verbose:
                     for rule_name, description in rules.items():
