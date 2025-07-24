@@ -650,67 +650,35 @@ class ConversationMonitor:
     
     def find_most_recent_log(self) -> Optional[Path]:
         """Find the most recent active conversation log for the target project"""
-        # Convert target path to the format used in .claude/projects
-        project_key = str(self.target_project_path)
+        # Convert target path to the format used in .claude/projects directory structure
+        # e.g., /path/to/project -> -path-to-project
+        project_key = str(self.target_project_path).replace('/', '-')
+        project_dir = self.claude_projects_path / project_key
         
         if not self.claude_projects_path.exists():
             print(f"❌ Claude projects directory not found: {self.claude_projects_path}")
             return None
         
-        self._log(f"🔍 Looking for logs in: {self.claude_projects_path}")
-        self._log(f"📁 Target project path: {project_key}")
-        
-        # Collect all JSONL files with their modification times
-        all_jsonl_files = []
-        
-        for root, dirs, files in os.walk(self.claude_projects_path):
-            for file in files:
-                if file.endswith('.jsonl'):
-                    file_path = Path(root) / file
-                    try:
-                        file_time = file_path.stat().st_mtime
-                        all_jsonl_files.append((file_path, file_time))
-                        self._log(f"📄 Found JSONL: {file_path} (mtime: {file_time})")
-                    except:
-                        continue
-        
-        if not all_jsonl_files:
-            print("❌ No JSONL log files found in Claude projects directory")
+        if not project_dir.exists():
+            self._log(f"⚠️ No log directory found for project: {project_dir}")
             return None
         
-        # Sort by modification time (most recent first)
-        all_jsonl_files.sort(key=lambda x: x[1], reverse=True)
-        self._log(f"📊 Found {len(all_jsonl_files)} total JSONL files")
-        
-        # Check each file (starting with most recent) to see if it matches our project
-        for file_path, file_time in all_jsonl_files:
-            try:
-                self._log(f"🔍 Checking file: {file_path}")
-                with open(file_path, 'r') as f:
-                    # Check multiple lines, not just the first one
-                    for line_num, line in enumerate(f):
-                        if line_num >= 10:  # Only check first 10 lines for performance
-                            break
-                        if project_key in line:
-                            self._log(f"✅ Match found in line {line_num + 1}")
-                            self._log(f"📋 Found conversation log: {file_path}")
-                            return file_path
-            except Exception as e:
-                self._log(f"⚠️ Error reading {file_path}: {e}")
-                continue
-        
-        # If no exact match found, show debugging info and use the most recent file
-        print(f"⚠️ No logs found containing exact project path: {project_key}")
-        if self.verbose:
-            print(f"📋 Available JSONL files (by recency):")
-            for i, (fp, ft) in enumerate(all_jsonl_files[:5]):  # Show top 5
-                timestamp = datetime.fromtimestamp(ft).strftime('%Y-%m-%d %H:%M:%S')
-                print(f"   {i+1}. {fp} ({timestamp})")
-        
-        # Use the most recent file as fallback
-        most_recent_file, most_recent_time = all_jsonl_files[0]
-        print(f"🔄 Using most recent log file as fallback: {most_recent_file}")
-        return most_recent_file
+        # Get all JSONL files in this project's directory
+        try:
+            jsonl_files = list(project_dir.glob('*.jsonl'))
+            if not jsonl_files:
+                self._log(f"❌ No JSONL files found in {project_dir}")
+                return None
+            
+            # Sort by modification time (most recent first)
+            jsonl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            most_recent = jsonl_files[0]
+            
+            return most_recent
+            
+        except Exception as e:
+            self._log(f"❌ Error accessing project directory {project_dir}: {e}")
+            return None
     
     def switch_to_log(self, new_log_path: Path):
         """Switch to monitoring a new log file, preserving context"""
