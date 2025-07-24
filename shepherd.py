@@ -3,9 +3,11 @@
 Claude Code Shepherd Script
 
 Monitors conversation logs and watches for issues defined in .shepherd/settings.json,
-including stop request detection and custom development practices.
+including custom development practices.
 
-Usage: python shepherd.py /path/to/developer/project [-v] [-b 10]
+Usage: 
+  Single project: python shepherd.py /path/to/developer/project [-v] [-b 10]
+  Multi project:  python shepherd.py [-v] [-b 10]  (reads from .shepherd/projects.json)
 """
 
 import os
@@ -15,6 +17,8 @@ import subprocess
 import signal
 import sys
 import argparse
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -33,6 +37,7 @@ class ClaudeShepherd:
         self.alert_count = 0
         self.prompt_shown = False
         self.reported_violations = []  # Track violations with message numbers: [{'message_num': int, 'violation': str}]
+        self.pending_analysis = None  # Track ongoing async analysis
         self._test_shepherd()
     
     def _log(self, message: str, force: bool = False):
@@ -251,12 +256,208 @@ Otherwise respond with: "✅ No violations detected"
             self._log(f"❌ Error during analysis: {e}")
             return "Analysis error"
     
-    def get_heartbeat_status(self) -> str:
-        """Get heartbeat status summary"""
-        if self.alert_count == 0:
-            return f"💚 Shepherd: {self.message_count} messages processed, all clear"
+    async def _async_claude_call(self, analysis_prompt: str) -> tuple[str, str, int]:
+        """Make async subprocess call to Claude"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", analysis_prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
+        except asyncio.TimeoutError:
+            if proc:
+                proc.kill()
+                await proc.wait()
+            return "", "Analysis timeout", 1
+        except Exception as e:
+            return "", f"Error during analysis: {e}", 1
+    
+    def start_analysis_async(self, message_content: str, message_type: str) -> asyncio.Task:
+        """Start async analysis and return task"""
+        if not self.is_running:
+            # Return a completed task with error result
+            async def error_result():
+                return "Shepherd unavailable"
+            return asyncio.create_task(error_result())
+        
+        if self.pending_analysis and not self.pending_analysis.done():
+            # Return the existing pending analysis
+            return self.pending_analysis
+            
+        # Build the analysis prompt (sync)
+        context_window = min(self.context_size, len(self.conversation_context))
+        context_summary = "\n".join(self.conversation_context[-context_window:])
+        
+        seed_prompt = self.config.get('seed', 'You are a software engineering supervisor monitoring a developer conversation.')
+        rules = self.config.get('rules', {})
+        
+        # Build rules section with clear formatting
+        rules_text = ""
+        if rules:
+            rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
+            for rule_name, description in rules.items():
+                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"VIOLATION: {description}\n"
+                rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
+        
+        # Build already reported violations section - only include violations still in context window
+        reported_section = ""
+        if self.reported_violations:
+            # Calculate the earliest message number in current context window
+            context_start_message = max(1, self.message_count - context_window + 1)
+            
+            # Clean up violations outside context window
+            self.reported_violations = [
+                v for v in self.reported_violations 
+                if v['message_num'] >= context_start_message
+            ]
+            
+            if self.reported_violations:
+                reported_section = f"\n=== ALREADY REPORTED VIOLATIONS (DO NOT RE-REPORT) ===\n"
+                for violation_entry in self.reported_violations:
+                    reported_section += f"- {violation_entry['violation']} (message #{violation_entry['message_num']})\n"
+                reported_section += "\nIGNORE these violations in your analysis - they have already been reported.\n"
+        
+        analysis_prompt = f"""{seed_prompt}
+
+YOUR PRIMARY ROLE: Monitor AI assistant's adherence to development standards
+
+{rules_text}{reported_section}
+
+RECENT CONVERSATION CONTEXT ({context_window} messages):
+{context_summary}
+
+ASSISTANT'S COMPLETE THINKING TO ANALYZE:
+{message_type}: "{message_content}"
+
+ANALYSIS TASK:
+Examine the assistant's complete thought process - reasoning, planning, suggestions, and execution.
+Violations occur when the assistant:
+- Reasons through using prohibited practices
+- Suggests commands or approaches that break rules
+- Plans implementations that violate development standards
+- Executes actions that ignore established practices
+
+Focus on the assistant's decision-making process, not user requests or questions.
+
+RESPONSE FORMAT:
+If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
+Otherwise respond with: "✅ No violations detected"
+"""
+        
+        # Log debug info
+        self._log(f"🔍 → Starting ASYNC analysis (total processed: {self.message_count}) with context ({len(self.conversation_context)} total, {context_window} in prompt)")
+        if self.verbose and not self.prompt_shown:
+            self._log(f"📋 Full analysis prompt being sent to Claude:\n{'-'*50}\n{analysis_prompt}\n{'-'*50}")
+            self.prompt_shown = True
+        
+        # Create and store the async task
+        self.pending_analysis = asyncio.create_task(self._process_async_analysis(analysis_prompt))
+        return self.pending_analysis
+    
+    async def _process_async_analysis(self, analysis_prompt: str) -> str:
+        """Process the async analysis and handle response"""
+        stdout, stderr, returncode = await self._async_claude_call(analysis_prompt)
+        
+        if returncode == 0:
+            response = stdout
+            self._log(f"📥 ← Shepherd: {response}")
+            
+            # Count alerts and track reported violations
+            if "🚨 ALERT:" in response:
+                self.alert_count += 1
+                # Extract the violation for tracking (format: "🚨 ALERT: [rule-name] - [description]")
+                violation_text = response.replace("🚨 ALERT: ", "")
+                self.reported_violations.append({
+                    'message_num': self.message_count,
+                    'violation': violation_text
+                })
+            
+            return response
         else:
-            return f"⚠️ Shepherd: {self.message_count} messages processed, {self.alert_count} alerts raised"
+            self._log(f"⚠️ Async analysis failed: {stderr}")
+            return "Analysis failed"
+    
+    def _build_analysis_prompt(self, message_content: str, message_type: str) -> str:
+        """Build analysis prompt (extracted from start_analysis_async for reuse)"""
+        context_window = min(self.context_size, len(self.conversation_context))
+        context_summary = "\n".join(self.conversation_context[-context_window:])
+        
+        seed_prompt = self.config.get('seed', 'You are a software engineering supervisor monitoring a developer conversation.')
+        rules = self.config.get('rules', {})
+        
+        # Build rules section with clear formatting
+        rules_text = ""
+        if rules:
+            rules_text = "\n=== CRITICAL DEVELOPMENT RULES TO ENFORCE ===\n"
+            for rule_name, description in rules.items():
+                rules_text += f"\nRULE: {rule_name.upper()}\n"
+                rules_text += f"VIOLATION: {description}\n"
+                rules_text += f"WATCH FOR: Assistant suggesting, implementing, or reasoning through this practice\n"
+        
+        # Build already reported violations section - only include violations still in context window
+        reported_section = ""
+        if self.reported_violations:
+            # Calculate the earliest message number in current context window
+            context_start_message = max(1, self.message_count - context_window + 1)
+            
+            # Clean up violations outside context window
+            self.reported_violations = [
+                v for v in self.reported_violations 
+                if v['message_num'] >= context_start_message
+            ]
+            
+            if self.reported_violations:
+                reported_section = f"\n=== ALREADY REPORTED VIOLATIONS (DO NOT RE-REPORT) ===\n"
+                for violation_entry in self.reported_violations:
+                    reported_section += f"- {violation_entry['violation']} (message #{violation_entry['message_num']})\n"
+                reported_section += "\nIGNORE these violations in your analysis - they have already been reported.\n"
+        
+        return f"""{seed_prompt}
+
+YOUR PRIMARY ROLE: Monitor AI assistant's adherence to development standards
+
+{rules_text}{reported_section}
+
+RECENT CONVERSATION CONTEXT ({context_window} messages):
+{context_summary}
+
+ASSISTANT'S COMPLETE THINKING TO ANALYZE:
+{message_type}: "{message_content}"
+
+ANALYSIS TASK:
+Examine the assistant's complete thought process - reasoning, planning, suggestions, and execution.
+Violations occur when the assistant:
+- Reasons through using prohibited practices
+- Suggests commands or approaches that break rules
+- Plans implementations that violate development standards
+- Executes actions that ignore established practices
+
+Focus on the assistant's decision-making process, not user requests or questions.
+
+RESPONSE FORMAT:
+If you detect rule violations, respond with: "🚨 ALERT: [rule-name] - [brief description of what the assistant did]"
+Otherwise respond with: "✅ No violations detected"
+"""
+    
+    def get_heartbeat_status(self, project_name: str = "", heartbeat_interval: int = 10) -> str:
+        """Get heartbeat status summary"""
+        if project_name:
+            prefix = f"{project_name}: "
+        else:
+            prefix = "Shepherd: "
+        
+        if self.alert_count == 0:
+            status = f"🐑 {prefix}{heartbeat_interval} messages processed"
+        else:
+            status = f"⚠️  {prefix}{heartbeat_interval} messages processed, {self.alert_count} alerts raised"
+        
+        # Only reset alert count after heartbeat
+        self.alert_count = 0
+        
+        return status
     
     def close(self):
         """No cleanup needed for subprocess approach"""
@@ -470,7 +671,7 @@ class ConversationMonitor:
                                             
                                             # Check heartbeat after every message
                                             if self.should_show_heartbeat():
-                                                print(f"💚 {self.shepherd.get_heartbeat_status()}")
+                                                print(self.shepherd.get_heartbeat_status(str(self.target_project_path), self.heartbeat_interval))
                                             
                                             # Only analyze if this is the last message
                                             if i == len(new_lines) - 1:
@@ -526,10 +727,213 @@ class ConversationMonitor:
             self._log(f"❌ Error analyzing message: {e}")
 
 
+class MultiProjectMonitor:
+    """Monitors multiple projects with async Claude calls"""
+    
+    def __init__(self, projects: List[str], verbose: bool = False, heartbeat_interval: int = 10, context_size: int = 10):
+        self.projects = projects
+        self.verbose = verbose
+        self.heartbeat_interval = heartbeat_interval
+        self.context_size = context_size
+        self.project_monitors = {}
+        self.pending_analyses = {}  # Track ongoing analyses per project
+        self.loop = None
+        
+        # Initialize monitors for each project
+        for project_path in projects:
+            monitor = ConversationMonitor(
+                project_path,
+                verbose=verbose,
+                heartbeat_interval=heartbeat_interval,
+                context_size=context_size
+            )
+            self.project_monitors[project_path] = monitor
+    
+    def _log(self, message: str, force: bool = False):
+        """Log message only if verbose mode is on or force is True"""
+        if self.verbose or force:
+            print(message)
+    
+    async def _run_event_loop(self):
+        """Run the async event loop for Claude calls"""
+        while True:
+            await asyncio.sleep(0.01)  # Keep event loop alive
+    
+    def monitor_all_projects(self):
+        """Monitor all projects with async Claude calls"""
+        print(f"🐑 Claude Code Shepherd - Multi Project Mode")
+        print("=" * 50)
+        print(f"📁 Monitoring {len(self.projects)} projects:")
+        for project in self.projects:
+            print(f"   📂 {project}")
+        print(f"📏 Context size: {self.context_size} messages")
+        if self.heartbeat_interval > 0:
+            print(f"💚 Heartbeat every {self.heartbeat_interval} messages")
+        print("🛑 Press Ctrl+C to stop monitoring\n")
+        
+        # Set up event loop for async operations
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        # Start the event loop in a separate thread
+        import threading
+        loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        loop_thread.start()
+        
+        try:
+            # Initialize project log paths and skip existing messages
+            for project_path, monitor in self.project_monitors.items():
+                if not monitor.project_log_path:
+                    monitor.project_log_path = monitor.find_target_project_log()
+                    if monitor.project_log_path:
+                        self._log(f"📋 {project_path}: Found log file {monitor.project_log_path}")
+                        # Skip existing messages - start from end of file
+                        if monitor.project_log_path.exists():
+                            with open(monitor.project_log_path, 'r') as f:
+                                existing_lines = f.readlines()
+                                monitor.last_processed_line = len(existing_lines)
+                                self._log(f"📊 {project_path}: Starting from line {monitor.last_processed_line} (skipping existing messages)")
+                    else:
+                        self._log(f"⚠️ {project_path}: No log file found")
+            
+            while True:
+                # Check each project for new messages
+                for project_path, monitor in self.project_monitors.items():
+                    if monitor.project_log_path and monitor.project_log_path.exists():
+                        with open(monitor.project_log_path, 'r') as f:
+                            lines = f.readlines()
+                            total_lines = len(lines)
+                            
+                            # Process new lines
+                            new_lines = lines[monitor.last_processed_line:]
+                            if new_lines:
+                                self._log(f"📂 {project_path}: Processing {len(new_lines)} new messages...")
+                                
+                                # Process all new messages but only analyze the last one
+                                for i, line in enumerate(new_lines):
+                                    line_num = monitor.last_processed_line + i + 1
+                                    
+                                    message = monitor.parse_jsonl_message(line)
+                                    if message and monitor.is_complete_message(message):
+                                        msg_type = message.get('type', 'unknown')
+                                        content = monitor.extract_content(message)
+                                        
+                                        if content and not content.isspace():
+                                            # Always add to context
+                                            monitor.shepherd.add_to_context(content, msg_type)
+                                            
+                                            # Check heartbeat
+                                            if monitor.should_show_heartbeat():
+                                                print(monitor.shepherd.get_heartbeat_status(project_path, monitor.heartbeat_interval))
+                                            
+                                            # Only analyze if this is the last message AND no analysis is pending
+                                            if (i == len(new_lines) - 1 and 
+                                                project_path not in self.pending_analyses):
+                                                
+                                                self._log(f"🎯 {project_path}: Starting async analysis...")
+                                                
+                                                # Start async analysis
+                                                future = asyncio.run_coroutine_threadsafe(
+                                                    monitor.shepherd._process_async_analysis(
+                                                        monitor.shepherd._build_analysis_prompt(content, msg_type)
+                                                    ),
+                                                    self.loop
+                                                )
+                                                self.pending_analyses[project_path] = future
+                                
+                                monitor.last_processed_line = total_lines
+                    
+                    # Check if any analyses completed
+                    if project_path in self.pending_analyses:
+                        future = self.pending_analyses[project_path]
+                        if future.done():
+                            try:
+                                result = future.result()
+                                if "🚨 ALERT:" in result:
+                                    print(f"\n🚨 {project_path}: {result}")
+                                    print("=" * 50)
+                                elif self.verbose:
+                                    print(f"✅ {project_path}: {result}")
+                                del self.pending_analyses[project_path]
+                            except Exception as e:
+                                self._log(f"❌ {project_path}: Error in analysis: {e}")
+                                del self.pending_analyses[project_path]
+                
+                time.sleep(0.1)  # Fast polling since Claude calls are async
+                
+        except KeyboardInterrupt:
+            print(f"\n🛑 Monitoring stopped by user")
+            total_alerts = sum(monitor.shepherd.alert_count for monitor in self.project_monitors.values())
+            total_messages = sum(monitor.shepherd.message_count for monitor in self.project_monitors.values())
+            print(f"📊 Final status: {total_messages} total messages processed, {total_alerts} alerts raised")
+        except Exception as e:
+            print(f"❌ Error during monitoring: {e}")
+        finally:
+            if self.loop:
+                self.loop.call_soon_threadsafe(self.loop.stop)
+            for monitor in self.project_monitors.values():
+                monitor.shepherd.close()
+
+
+def load_multi_project_config() -> List[str]:
+    """Load multi-project configuration from .shepherd/projects.json"""
+    # Try shepherd's own directory first
+    config_path = Path(__file__).parent / ".shepherd" / "projects.json"
+    
+    # If not found, try user's home directory
+    if not config_path.exists():
+        home_config = Path.home() / ".shepherd" / "projects.json"
+        if home_config.exists():
+            config_path = home_config
+    
+    if not config_path.exists():
+        print(f"❌ No projects config found")
+        print(f"📋 Searched: {Path(__file__).parent / '.shepherd' / 'projects.json'}")
+        print(f"📋 Searched: {Path.home() / '.shepherd' / 'projects.json'}")
+        print(f"📝 Create a projects.json file with format: {{\"projects\": [\"/path/to/project1\", \"/path/to/project2\"]}}")
+        sys.exit(1)
+    
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        projects = config.get('projects', [])
+        if not projects:
+            print(f"❌ No projects found in config file: {config_path}")
+            print(f"📝 Expected format: {{\"projects\": [\"/path/to/project1\", \"/path/to/project2\"]}}")
+            sys.exit(1)
+        
+        # Validate project paths
+        valid_projects = []
+        for project_path in projects:
+            path = Path(project_path).resolve()
+            if path.exists() and path.is_dir():
+                valid_projects.append(str(path))
+            else:
+                print(f"⚠️ Warning: Project path does not exist or is not a directory: {project_path}")
+        
+        if not valid_projects:
+            print(f"❌ No valid projects found in config file")
+            sys.exit(1)
+        
+        print(f"✅ Loaded projects config from {config_path}")
+        print(f"📂 Found {len(valid_projects)} valid projects")
+        
+        return valid_projects
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON in projects config: {e}")
+        print(f"📄 Please fix {config_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"⚠️ Error loading projects config: {e}")
+        sys.exit(1)
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Claude Code Shepherd - Monitor conversations for issues")
-    parser.add_argument("project_path", help="Path to the developer's project directory to monitor")
+    parser.add_argument("project_path", nargs="?", help="Path to the developer's project directory to monitor (if not provided, uses .claude/projects.json)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
     parser.add_argument("-b", "--heartbeat", type=int, default=10, metavar="NUM", 
                        help="Show heartbeat every NUM messages (0 to disable, default: 10)")
@@ -538,29 +942,42 @@ def main():
     
     args = parser.parse_args()
     
-    project_path = Path(args.project_path).resolve()
-    if not project_path.exists():
-        print(f"❌ Error: Project path does not exist: {project_path}")
-        sys.exit(1)
-    
-    if not project_path.is_dir():
-        print(f"❌ Error: Project path is not a directory: {project_path}")
-        sys.exit(1)
-    
-    print("🐑 Claude Code Shepherd")
-    print("=" * 25)
-    print(f"📁 Monitoring project: {project_path}")
-    print(f"🏠 Shepherd running from: {os.getcwd()}")
-    print(f"📏 Context size: {args.context} messages")
-    print()
-    
-    monitor = ConversationMonitor(
-        str(project_path), 
-        verbose=args.verbose,
-        heartbeat_interval=args.heartbeat,
-        context_size=args.context
-    )
-    monitor.monitor_conversation()
+    if args.project_path:
+        # Single project mode
+        project_path = Path(args.project_path).resolve()
+        if not project_path.exists():
+            print(f"❌ Error: Project path does not exist: {project_path}")
+            sys.exit(1)
+        
+        if not project_path.is_dir():
+            print(f"❌ Error: Project path is not a directory: {project_path}")
+            sys.exit(1)
+        
+        print("🐑 Claude Code Shepherd - Single Project Mode")
+        print("=" * 45)
+        print(f"📁 Monitoring project: {project_path}")
+        print(f"🏠 Shepherd running from: {os.getcwd()}")
+        print(f"📏 Context size: {args.context} messages")
+        print()
+        
+        monitor = ConversationMonitor(
+            str(project_path), 
+            verbose=args.verbose,
+            heartbeat_interval=args.heartbeat,
+            context_size=args.context
+        )
+        monitor.monitor_conversation()
+        
+    else:
+        # Multi-project mode - load from .claude/projects.json
+        projects = load_multi_project_config()
+        monitor = MultiProjectMonitor(
+            projects,
+            verbose=args.verbose,
+            heartbeat_interval=args.heartbeat,
+            context_size=args.context
+        )
+        monitor.monitor_all_projects()
 
 
 if __name__ == "__main__":
