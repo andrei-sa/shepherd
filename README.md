@@ -15,6 +15,8 @@ A monitoring script that watches Claude Code conversations for rule violations a
 - **Multi-project support** with concurrent monitoring and async analysis
 - **Structured alerts** with detailed reasoning and actionable suggestions
 - **Color-coded output** for easy visual parsing of alerts
+- **Real-time suggestion injection** via Claude Code hooks for immediate feedback
+- **Detection-only mode** for monitoring without automated intervention
 
 ## Installation
 
@@ -60,18 +62,19 @@ For multi-project mode, create `.shepherd/projects.json`:
 
 ### Single Project Mode
 ```bash
-python shepherd.py /path/to/project [-v] [-b 10] [-c 10]
+python shepherd.py /path/to/project [-v] [-b 10] [-c 10] [--detect-only]
 ```
 
 ### Multi-Project Mode  
 ```bash
-python shepherd.py [-v] [-b 10] [-c 10]
+python shepherd.py [-v] [-b 10] [-c 10] [--detect-only]
 ```
 
 **Command Line Options:**
 - `-v` or `--verbose`: Enable detailed debug output
 - `-b NUM` or `--heartbeat NUM`: Show heartbeat every NUM messages (default: 10, 0 to disable)
 - `-c SIZE` or `--context SIZE`: Number of messages to include in analysis context (default: 10)
+- `--detect-only`: Detection-only mode - skip hook installation and suggestion file creation
 
 ## How It Works
 
@@ -81,6 +84,22 @@ python shepherd.py [-v] [-b 10] [-c 10]
 4. **Context Tracking**: Maintains conversation context and tracks reported violations
 5. **Async Processing**: Processes multiple projects concurrently with non-blocking analysis
 6. **Smart Alerting**: Avoids duplicate alerts for violations still within context window
+7. **Automatic Feedback**: By default, suggestions are automatically injected into Claude Code conversations via hooks for immediate guidance
+
+## Operating Modes
+
+### Default Mode (Full Integration)
+- **Hook Installation**: Automatically installs UserPromptSubmit hooks in monitored projects
+- **Real-time Injection**: Suggestions are injected directly into Claude Code prompts for immediate guidance
+- **Suggestion Storage**: Creates `.shepherd/suggestions/<project-id>.md` files for hook consumption
+- **How it works**: When violations are detected, shepherd writes suggestions to project-specific files. Claude Code's UserPromptSubmit hook reads these files and automatically prepends suggestions to user prompts before Claude processes them. The suggestion files are deleted after reading to prevent duplication.
+- **Best for**: Active development with immediate feedback and guidance
+
+### Detection-Only Mode (`--detect-only`)
+- **No Hook Installation**: Skips installing Claude Code hooks
+- **No File Creation**: Suggestions are only displayed in terminal, not stored for injection
+- **Pure Monitoring**: Only detects and reports violations without automated intervention
+- **Best for**: Code reviews, auditing, or environments where hook installation isn't desired
 
 ## Alert Output Format
 

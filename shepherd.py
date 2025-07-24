@@ -32,6 +32,27 @@ class Colors:
     RESET = '\033[0m'
 
 
+def store_suggestion_file(alert_response: str, project_path: str):
+    """Store suggestion in project-specific file for hook injection"""
+    # Extract suggestion from alert response
+    suggestion_match = re.search(r'SUGGESTION:\s*(.+)', alert_response, re.DOTALL)
+    if suggestion_match:
+        suggestion = suggestion_match.group(1).strip()
+        
+        # Generate project_id from path (same format as Claude uses)
+        project_id = str(Path(project_path)).replace('/', '-')
+        
+        # Create suggestions directory
+        suggestions_dir = Path(".shepherd/suggestions")
+        suggestions_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Write suggestion file (overwrite if exists)
+        suggestion_file = suggestions_dir / f"{project_id}.md"
+        
+        with open(suggestion_file, 'w') as f:
+            f.write(f"🐑 **Shepherd Alert**: {suggestion}")
+
+
 def format_structured_alert(alert_response: str, project_path: str) -> str:
     """Parse and format structured alert with color coding"""
     lines = alert_response.strip().split('\n')
@@ -638,13 +659,14 @@ CRITICAL: Use "ALERT:" (no emoji), keep rule names in lowercase-with-hyphens for
 class ConversationMonitor:
     """Monitors Claude Code conversation logs"""
     
-    def __init__(self, target_project_path: str, verbose: bool = False, heartbeat_interval: int = 10, context_size: int = 10):
+    def __init__(self, target_project_path: str, verbose: bool = False, heartbeat_interval: int = 10, context_size: int = 10, detect_only: bool = False):
         self.target_project_path = Path(target_project_path).resolve()
         self.claude_projects_path = Path.home() / ".claude" / "projects"
         self.project_log_path = None
         self.last_processed_line = 0
         self.verbose = verbose
         self.heartbeat_interval = heartbeat_interval
+        self.detect_only = detect_only
         self.shepherd = ClaudeShepherd(verbose=verbose, context_size=context_size)
         
         # Load project-specific shepherd configuration
@@ -768,14 +790,70 @@ class ConversationMonitor:
     
 
 
+def install_shepherd_hooks(projects: List[str], verbose: bool = False):
+    """Install UserPromptSubmit hooks for all monitored projects"""
+    hook_script_path = Path(__file__).parent / "shepherd_hook.py"
+    
+    if not hook_script_path.exists():
+        print(f"❌ Hook script not found: {hook_script_path}")
+        return False
+    
+    installed_count = 0
+    
+    for project_path in projects:
+        try:
+            project_claude_dir = Path(project_path) / ".claude"
+            settings_file = project_claude_dir / "settings.json"
+            
+            # Create .claude directory if it doesn't exist
+            project_claude_dir.mkdir(exist_ok=True)
+            
+            # Load existing settings or create new
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r') as f:
+                        settings = json.load(f)
+                except json.JSONDecodeError:
+                    if verbose:
+                        print(f"⚠️ Invalid JSON in {settings_file}, creating new settings")
+                    settings = {}
+            
+            # Add shepherd hook configuration
+            if "hooks" not in settings:
+                settings["hooks"] = {}
+            
+            settings["hooks"]["UserPromptSubmit"] = [{
+                "hooks": [{
+                    "type": "command",
+                    "command": str(hook_script_path.absolute())
+                }]
+            }]
+            
+            # Write back settings
+            with open(settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+            
+            if verbose:
+                print(f"✅ Installed hook for: {project_path}")
+            installed_count += 1
+            
+        except Exception as e:
+            print(f"❌ Failed to install hook for {project_path}: {e}")
+    
+    print(f"🎣 Installed shepherd hooks for {installed_count}/{len(projects)} projects")
+    return installed_count > 0
+
+
 class MultiProjectMonitor:
     """Monitors multiple projects with async Claude calls"""
     
-    def __init__(self, projects: List[str], verbose: bool = False, heartbeat_interval: int = 10, context_size: int = 10):
+    def __init__(self, projects: List[str], verbose: bool = False, heartbeat_interval: int = 10, context_size: int = 10, detect_only: bool = False):
         self.projects = projects
         self.verbose = verbose
         self.heartbeat_interval = heartbeat_interval
         self.context_size = context_size
+        self.detect_only = detect_only
         self.project_monitors = {}
         self.pending_analyses = {}  # Track ongoing analyses per project
         self.loop = None
@@ -786,7 +864,8 @@ class MultiProjectMonitor:
                 project_path,
                 verbose=verbose,
                 heartbeat_interval=heartbeat_interval,
-                context_size=context_size
+                context_size=context_size,
+                detect_only=detect_only
             )
             self.project_monitors[project_path] = monitor
     
@@ -899,6 +978,9 @@ class MultiProjectMonitor:
                                     formatted_alert = format_structured_alert(result, project_path)
                                     print(f"\n{formatted_alert}")
                                     print("=" * 50)
+                                    # Store suggestion for hook injection (unless detect-only mode)
+                                    if not self.detect_only:
+                                        store_suggestion_file(result, project_path)
                                 elif self.verbose:
                                     print(f"✅ {project_path}: {result}")
                                 del self.pending_analyses[project_path]
@@ -977,6 +1059,11 @@ def load_multi_project_config() -> List[str]:
         sys.exit(1)
 
 
+def sum_two_numbers(a, b):
+    """Sum two numbers and return the result"""
+    return a + b
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Claude Code Shepherd - Monitor conversations for issues")
@@ -986,6 +1073,8 @@ def main():
                        help="Show heartbeat every NUM messages (0 to disable, default: 10)")
     parser.add_argument("-c", "--context", type=int, default=10, metavar="SIZE",
                        help="Number of messages to include in analysis context (default: 10)")
+    parser.add_argument("--detect-only", action="store_true", 
+                       help="Detection only mode: skip hook installation and suggestion file creation")
     
     args = parser.parse_args()
     
@@ -1014,12 +1103,22 @@ def main():
         # Multi-project mode - load from .shepherd/projects.json
         projects = load_multi_project_config()
         
+    # Install hooks for all projects before starting monitoring (unless detect-only mode)
+    if not args.detect_only:
+        print("🎣 Installing shepherd hooks...")
+        install_shepherd_hooks(projects, verbose=args.verbose)
+        print()
+    else:
+        print("🔍 Detection-only mode: skipping hook installation")
+        print()
+    
     # Use unified MultiProjectMonitor for both modes
     monitor = MultiProjectMonitor(
         projects,
         verbose=args.verbose,
         heartbeat_interval=args.heartbeat,
-        context_size=args.context
+        context_size=args.context,
+        detect_only=args.detect_only
     )
     monitor.monitor_all_projects()
 
