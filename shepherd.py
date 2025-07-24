@@ -558,8 +558,8 @@ class ConversationMonitor:
         if self.verbose or force:
             print(message)
     
-    def find_target_project_log(self) -> Optional[Path]:
-        """Find the most recent conversation log for the target project"""
+    def find_most_recent_log(self) -> Optional[Path]:
+        """Find the most recent active conversation log for the target project"""
         # Convert target path to the format used in .claude/projects
         project_key = str(self.target_project_path)
         
@@ -603,7 +603,7 @@ class ConversationMonitor:
                             break
                         if project_key in line:
                             self._log(f"✅ Match found in line {line_num + 1}")
-                            print(f"📋 Found conversation log: {file_path}")
+                            self._log(f"📋 Found conversation log: {file_path}")
                             return file_path
             except Exception as e:
                 self._log(f"⚠️ Error reading {file_path}: {e}")
@@ -621,6 +621,24 @@ class ConversationMonitor:
         most_recent_file, most_recent_time = all_jsonl_files[0]
         print(f"🔄 Using most recent log file as fallback: {most_recent_file}")
         return most_recent_file
+    
+    def switch_to_log(self, new_log_path: Path):
+        """Switch to monitoring a new log file, preserving context"""
+        old_log = self.project_log_path
+        self.project_log_path = new_log_path
+        
+        # Reset to end of new file to avoid reprocessing old messages
+        if new_log_path.exists():
+            with open(new_log_path, 'r') as f:
+                existing_lines = f.readlines()
+                self.last_processed_line = len(existing_lines)
+        
+        # Log the switch (non-debug, always visible)
+        print(f"🔄 {self.target_project_path}: Switched to new log file")
+        print(f"   Old: {old_log.name if old_log else 'None'}")  
+        print(f"   New: {new_log_path.name}")
+        
+        self._log(f"📊 Starting from line {self.last_processed_line} in new log")
     
     def parse_jsonl_message(self, line: str) -> Optional[Dict[str, Any]]:
         """Parse a JSONL line into a message object"""
@@ -742,7 +760,7 @@ class MultiProjectMonitor:
             # Initialize project log paths and skip existing messages
             for project_path, monitor in self.project_monitors.items():
                 if not monitor.project_log_path:
-                    monitor.project_log_path = monitor.find_target_project_log()
+                    monitor.project_log_path = monitor.find_most_recent_log()
                     if monitor.project_log_path:
                         self._log(f"📋 {project_path}: Found log file {monitor.project_log_path}")
                         # Skip existing messages - start from end of file
@@ -757,6 +775,11 @@ class MultiProjectMonitor:
             while True:
                 # Check each project for new messages
                 for project_path, monitor in self.project_monitors.items():
+                    # Check for newer log files every iteration
+                    newest_log = monitor.find_most_recent_log()
+                    if newest_log and newest_log != monitor.project_log_path:
+                        monitor.switch_to_log(newest_log)
+                    
                     if monitor.project_log_path and monitor.project_log_path.exists():
                         with open(monitor.project_log_path, 'r') as f:
                             lines = f.readlines()
